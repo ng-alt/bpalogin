@@ -26,7 +26,8 @@ case "$1" in
 	# Start daemons.
 
 	echo -n "Starting bpalogin: "
-	/usr/sbin/bpalogin -c /etc/bpalogin.conf
+	/usr/bin/newaliases > /dev/null 2>&1
+	daemon /usr/sbin/bpalogin -c /etc/bpalogin.conf
 	echo
 	touch /var/lock/subsys/bpalogin
 	;;
