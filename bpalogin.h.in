@@ -1,6 +1,6 @@
 /*
-**	BPALogin v1.5 - lightweight portable BIDS2 login client
-**	Copyright (c) 1999-2000  Shane Hyde (shyde@trontech.net)
+**    BPALogin - lightweight portable BIDS2 login client
+**    Copyright (c) 2001 David Parrish <dparrish@4u.net>
 ** 
 **  This program is free software; you can redistribute it and/or modify
 **  it under the terms of the GNU General Public License as published by
@@ -18,6 +18,12 @@
 **
 */ 
 
+/**
+ * Changes:
+ * 
+ * 2001-12-05:  wdrose     Added errno.h to list of UNIX-only includes.
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -25,11 +31,13 @@
 
 #ifndef _WIN32
 #include <unistd.h>
+#include <errno.h>
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <syslog.h>
+#include <arpa/inet.h>
 #endif
 
 #include <time.h>
@@ -44,6 +52,7 @@
 **  Win32 & BeOS use a closesocket call, and unices use a close call, this define fixes this up
 */
 #ifndef _WIN32
+int closesocket(int);
 //#define closesocket close
 #endif
 
@@ -53,6 +62,13 @@
 #define HAS_VNSPRINTF
 
 #define sleep(x) Sleep((x)*1000)
+#endif
+
+/*
+** This is needed for compiling with EMX under OS/2
+*/
+#ifdef __EMX__
+  #define strcasecmp stricmp
 #endif
 
 
@@ -65,13 +81,17 @@
 #define MAXUSERNAME 25
 #define MAXPASSWORD 25
 #define MAXAUTHSERVER 80
+#define MAXAUTHDOMAIN 80
 #define MAXLOGINPROG 256
 #define MAXCONFFILE 256
+#define MAXLOCALADDRESS 32
+#define MAXDDNSCONFFILE 256
 
-#define DEFAULT_DEBUG 		1
-#define DEFAULT_AUTHSERVER 	"dce-server"
-#define DEFAULT_AUTHPORT 	5050
-#define DEFAULT_CONFFILE 	"/etc/bpalogin.conf"
+#define DEFAULT_DEBUG         1
+#define DEFAULT_AUTHSERVER     "sm-server"
+#define DEFAULT_AUTHDOMAIN     ""
+#define DEFAULT_AUTHPORT     5050
+#define DEFAULT_CONFFILE     "@@BPALOGIN_CONF@@"
 /*
 ** state engine codes
 */
@@ -94,6 +114,7 @@
 /*
 ** message type codes
 */
+#define T_MSG_MIN 1
 #define T_MSG_PROTOCOL_NEG_REQ 1
 #define T_MSG_PROTOCOL_NEG_RESP 2
 #define T_MSG_LOGIN_REQ 3
@@ -108,10 +129,12 @@
 #define T_MSG_STATUS_RESP 12
 #define T_MSG_RESTART_REQ 13
 #define T_MSG_RESTART_RESP 14
+#define T_MSG_MAX 14
 
 /*
 ** message parameter codes
 */
+#define T_PARAM_MIN 1
 #define T_PARAM_PROTOCOL_LIST 1
 #define T_PARAM_PROTOCOL_SELECT 2
 #define T_PARAM_CLIENT_VERSION 3
@@ -136,6 +159,7 @@
 #define T_PARAM_TSMLIST 22
 #define T_PARAM_LOGIN_PARAM_HASH 23
 #define T_PARAM_LOGIN_SERVER_HOST 24
+#define T_PARAM_MAX 24
 
 /*
 ** login reason codes
@@ -198,8 +222,8 @@ typedef unsigned int INT4;
 
 struct transaction
 {
-	char data[1512];
-	int length;
+    char data[1512];
+    int length;
 };
 
 /*
@@ -207,57 +231,68 @@ struct transaction
 */
 struct session
 {
-	/*
-	**  Control paramters
-	*/
-	char username[MAXUSERNAME];
-	char password[MAXPASSWORD];
-	char authserver[MAXAUTHSERVER];
-	unsigned short authport;
-	char loginprog[MAXLOGINPROG];
-	void * pUserData;
-	int shutdown;
+    /*
+    **  Control paramters
+    */
+    char username[MAXUSERNAME];
+    char password[MAXPASSWORD];
+    char authserver[MAXAUTHSERVER];
+    char authdomain[MAXAUTHDOMAIN];
+    unsigned short authport;
+    char connectedprog[MAXLOGINPROG];
+    char disconnectedprog[MAXLOGINPROG];
+    void * pUserData;
+    int shutdown;
+    char localaddress[MAXLOCALADDRESS];
+    unsigned short localport;
+    int minheartbeat;
 
-	/*
-	**  Callback functions
-	*/
-	void (*debug)(int,char *,...);
-	void (*critical)(char *);
-	void (*noncritical)(char *,...);
-	void (*onconnected)(int listenport);
-	void (*ondisconnected)();
+    /*
+    **  Callback functions
+    */
+    void (*debug)(int,char *,...);
+    void (*critical)(char *);
+    void (*noncritical)(char *,...);
+    void (*onconnected)(int listenport);
+    void (*ondisconnected)(int reason);
 
-	/*
-	**  Internal data
-	*/
-	INT4 sessionid;
-	INT2 listenport;
-	struct sockaddr_in authhost;
-	char osname[80];
-	char osrelease[80];
-	int listensock;
+    /*
+    **  Internal data
+    */
+    INT4 sessionid;
+    INT2 listenport;
+    struct sockaddr_in authhost;
+    char osname[80];
+    char osrelease[80];
+    int listensock;
+    struct sockaddr_in localaddr;
+    struct sockaddr_in localipaddress;
 
-	INT2 protocol;
-	INT2 loginserviceport;
-	char loginserverhost[128];
-	INT2 hashmethod;
-	char nonce[17];
-	INT2 retcode;
-	INT2 logoutport;
-	INT2 statusport;
-	char tsmlist[512];
-	char resptext[512];
-	INT4 timestamp;
+    INT2 protocol;
+    INT2 loginserviceport;
+    char loginserverhost[128];
+    INT2 hashmethod;
+    char nonce[17];
+    INT2 retcode;
+    INT2 logoutport;
+    INT2 statusport;
+    char tsmlist[512];
+    char tsmlist_s[512][20];
+    struct sockaddr_in tsmlist_in[20];
+    int tsmcount;
+    char resptext[512];
+    INT4 timestamp;
 
-	time_t lastheartbeat;
-	INT4 sequence;
-	struct sockaddr_in fromaddr;
+    time_t lastheartbeat;
+    int recenthb;
+    INT4 sequence;
+    struct sockaddr_in fromaddr;
 };
 
 /*
 **  Prototypes
 */
-int	mainloop(struct session *);
+int mainloop(struct session *);
 int handle_heartbeats(struct session *);
 
 void start_transaction(struct transaction * t,INT2 msgtype,INT4 sessionid);
@@ -266,17 +301,20 @@ INT2 receive_transaction(struct session *s,int socket,struct transaction * t);
 INT2 receive_udp_transaction(struct session *s,int socket,struct transaction * t,struct sockaddr_in *addr);
 void send_udp_transaction(struct session * s,struct transaction * t);
 
-int extract_valueINT2(struct session *s,struct transaction * t,INT2 parm,INT2 *v);
-int	extract_valueINT4(struct session *s,struct transaction *,INT2,INT4 *);
-int	extract_valuestring(struct session *s,struct transaction *,INT2,char *);
+int  extract_valueINT2(struct session *s,struct transaction * t,INT2 parm,INT2 *v);
+int  extract_valueINT4(struct session *s,struct transaction *,INT2,INT4 *);
+int  extract_valuestring(struct session *s,struct transaction *,INT2,char *);
 
 void add_field_string(struct session *s,struct transaction * t,INT2 fn,char * p);
 void add_field_data(struct session *s,struct transaction * t,INT2 fn,char * p,int c);
 void add_field_INT2(struct session *s,struct transaction * t,INT2 fn,INT2 v);
 void add_field_INT4(struct session *s,struct transaction * t,INT2 fn,INT4 v);
 
-int login(struct session *);
-int logout(INT2,struct session *);
+int  login(struct session *);
+int  logout(INT2,struct session *);
 
 INT2 read_INT2(void *);
 INT4 read_INT4(void *);
+
+void socketerror(struct session *,const char *);
+

@@ -1,6 +1,6 @@
 /*
-**	BPALogin v1.5 - lightweight portable BIDS2 login client
-**	Copyright (c) 1999  Shane Hyde (shyde@trontech.com.au)
+**	BPALogin - lightweight portable BIDS2 login client
+**	Copyright (c) 2001 David Parrish <dparrish@4u.net>
 ** 
 **  This program is free software; you can redistribute it and/or modify
 **  it under the terms of the GNU General Public License as published by
@@ -50,7 +50,7 @@ void add_data(struct transaction * t,char *s,int c)
 
 void add_field_string(struct session *s,struct transaction * t,INT2 fn,char * p)
 {
-	s->debug(1,"Sending parm %d value %s\n",fn,p);
+	s->debug(2,"Sending parm %d value %s\n",fn,p);
 
 	add_int2field(t,htons(fn));
 	add_string(t,p);
@@ -58,7 +58,7 @@ void add_field_string(struct session *s,struct transaction * t,INT2 fn,char * p)
 
 void add_field_data(struct session *s,struct transaction * t,INT2 fn,char * p,int c)
 {
-	s->debug(1,"Sending parm %d value %s\n",fn,p);
+	s->debug(2,"Sending parm %d value %s\n",fn,p);
 
 	add_int2field(t,htons(fn));
 	add_data(t,p,c);
@@ -66,7 +66,7 @@ void add_field_data(struct session *s,struct transaction * t,INT2 fn,char * p,in
 
 void add_field_INT2(struct session *s,struct transaction * t,INT2 fn,INT2 v)
 {
-	s->debug(1,"Sending parm %d value %d\n",fn,v);
+	s->debug(2,"Sending parm %d value %d\n",fn,v);
 
 	add_int2field(t,htons(fn));
 	add_int2field(t,htons(6));
@@ -75,7 +75,7 @@ void add_field_INT2(struct session *s,struct transaction * t,INT2 fn,INT2 v)
 
 void add_field_INT4(struct session *s,struct transaction * t,INT2 fn,INT4 v)
 {
-	s->debug(1,"Sending parm %d value %d\n",fn,v);
+	s->debug(2,"Sending parm %d value %d\n",fn,v);
 
 	add_int2field(t,htons(fn));
 	add_int2field(t,htons(8));
@@ -98,24 +98,24 @@ void dump_transaction(struct session * s,struct transaction * t)
 	i = 0;
 	while(i < t->length)
 	{
-		s->debug(2,"%d:%02x ",i,(unsigned char)*(p));
+		s->debug(3,"%d:%02x ",i,(unsigned char)*(p));
 
 		p++;
 		i++;
 	}
-	s->debug(2,"\n");
+	s->debug(3,"\n");
 
 }
 
 void dump_sent_transaction(struct session *s,struct transaction * t)
 {
-	s->debug(2,"Sent transaction:\n");
+	s->debug(3,"Sent transaction:\n");
 	dump_transaction(s,t);
 }
 
 void dump_recv_transaction(struct session *s,struct transaction * t)
 {
-	s->debug(2,"Received transaction:\n");
+	s->debug(3,"Received transaction:\n");
 	dump_transaction(s,t);
 }
 
@@ -158,13 +158,32 @@ INT2 receive_transaction(struct session *s,int socket,struct transaction * t)
 	return r>0?ntohs(*v):0;
 }
 
+int check_hb_packet(struct session * s,struct transaction * t,int length)
+{
+	INT2 type;
+
+	type = ntohs(*(INT2 *)t);
+	if(type != T_MSG_STATUS_REQ) 
+	{
+		s->debug(0,"Incorrect transaction type %d",type);
+		return 0;
+	}
+
+	if(length != 8)
+	{
+		s->debug(0,"Incorrect transaction length %d",length);
+		return 0;
+	}
+	return 1;
+}
+
 INT2 receive_udp_transaction(struct session *s,int socket,struct transaction * t,struct sockaddr_in *addr)
 {
 	struct timeval timeval;
 	fd_set readfds;
 	INT2 * v;
 	int l = sizeof(struct sockaddr_in);
-	int r;
+	int r,i;
 
 	timeval.tv_sec = 420;
 	timeval.tv_usec = 0;
@@ -186,8 +205,45 @@ INT2 receive_udp_transaction(struct session *s,int socket,struct transaction * t
 		r = recvfrom(socket,(char *)t,1500,0,(struct sockaddr*)addr,&l);
 		if(r==-1)
 			return (INT2) 0xfffe;
+
+		if(s->lastheartbeat + s->minheartbeat > time(NULL))
+		{
+        		s->recenthb++;
+        		if(s->recenthb > 3)
+        		{
+        			s->debug(0,"Heartbeats arriving too quickly - discarding\n");
+				return (INT2)0xfffd;
+
+        		}
+		}
+		else
+        		s->recenthb = 0;
+
+		s->lastheartbeat = time(NULL);
 	}
+
+	for(i = 0;i<s->tsmcount;i++)
+	{
+		if(addr->sin_addr.s_addr == s->tsmlist_in[i].sin_addr.s_addr)
+			break;
+	}
+	if(i == s->tsmcount)
+	{
+		s->debug(0,"Received a heartbeat from unexpected source %s:%d\n",inet_ntoa(addr->sin_addr),ntohs(addr->sin_port));
+		return (INT2)0xfffd;
+	}
+
 	t->length = r;
+
+	dump_recv_transaction(s,t);
+	/*
+	**  Lets make sure this packet is structured correctly
+	*/
+	if(!check_hb_packet(s,t,r))
+	{
+		return (INT2)0xfffd;
+	}
+
 	dump_recv_transaction(s,t);
 
 	v = (INT2 *)t;
@@ -229,7 +285,7 @@ int extract_valueINT2(struct session *s,struct transaction * t,INT2 parm,INT2 *v
 	if(pp)
 	{
 		*v = read_INT2(pp);
-		s->debug(1,"Received parm %d value %d\n",parm,*v);
+		s->debug(2,"Received parm %d value %d\n",parm,*v);
 
 		return TRUE;
 	}
@@ -242,7 +298,7 @@ int extract_valueINT4(struct session *s,struct transaction * t,INT2 parm,INT4 *v
 	if(pp)
 	{
 		*v = read_INT4(pp);
-		s->debug(1,"Received parm %d value %d\n",parm,*v);
+		s->debug(2,"Received parm %d value %d\n",parm,*v);
 
 		return TRUE;
 	}
@@ -257,7 +313,7 @@ int extract_valuestring(struct session *s,struct transaction * t,INT2 parm,char 
 		INT2 l = read_INT2(pp-2);
 		memcpy(v,pp,l-4);
 		*(v+l-4) = 0;
-		s->debug(1,"Received parm %d value %s\n",parm,v);
+		s->debug(2,"Received parm %d value %s\n",parm,v);
 
 		return TRUE;
 	}

@@ -1,0 +1,51 @@
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+
+SBINPATH=@sbindir@
+ETCPATH=@sysconfdir@
+INITPATH=/etc/rc.d/init.d
+
+INSTALL=@INSTALL@
+CHKCONFIG=@CHKCONFIG@
+SED=@SED@
+
+CFLAGS=@CFLAGS@ -Wall 
+CC=gcc
+LIBS=@LIBS@
+LDFLAGS=@LDFLAGS@
+
+OBJS = bpalogin.o protocol.o transaction.o gen_md5.o unixmain.o
+
+bpalogin: $(OBJS)
+	$(CC) -o $@ $(OBJS) $(LIBS) $(LDFLAGS)
+
+.c.o:
+	$(CC) $(CFLAGS) -c $<
+
+clean:
+	rm -fr *.o 
+
+distclean: clean
+	rm -f bpalogin config.log config.cache config.status Makefile bpalogin.h
+
+bpalogin.h: bpalogin.h.in
+	$(SED) 's#@@BPALOGIN_CONF@@#$(ETCPATH)/bpalogin.conf#' < bpalogin.h.in > bpalogin.h
+
+$(OBJS): bpalogin.h
+
+install: bpalogin bpalogin.init
+	if [ ! -z $(RPM_BUILD_ROOT) ]; then
+		SBINPATH=$(RPM_BUILD_ROOT)/usr/sbin
+		ETCPATH=$(RPM_BUILD_ROOT)/etc
+		INITPATH=$(RPM_BUILD_ROOT)/etc/rc.d/init.d
+	fi
+	mkdir -p $(SBINPATH)
+	mkdir -p $(ETCPATH)
+	mkdir -p $(INITPATH)
+	$(INSTALL) -m 755 bpalogin $(SBINPATH)
+	$(INSTALL) -m 600 bpalogin.conf $(ETCPATH)
+	$(INSTALL) -m 755 bpalogin.init $(INITPATH)/bpalogin
+	if [ ! -z $(CHKCONFIG) ]; then
+		$(CHKCONFIG) --add bpalogin
+	fi
+

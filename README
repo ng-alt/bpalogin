@@ -1,0 +1,16 @@
+BPALogin
+--------
+
+This is a client to connect to Australia's Big Pond Advance powered by Cable.  
+
+This client should run on -
+
+	* Linux
+	* Solaris
+	* FreeBSD
+	* Most other Unices.
+
+BPALogin was created by Shane Hyde, and is now maintained by David
+Parrish <dparrish@4u.net>.
+
+The latest version is at http://bpalogin.sourceforge.net/

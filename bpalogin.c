@@ -1,6 +1,6 @@
 /*
-**	BPALogin v1.5 - lightweight portable BIDS2 login client
-**	Copyright (c) 1999  Shane Hyde (shyde@trontech.com.au)
+**	BPALogin - lightweight portable BIDS2 login client
+**	Copyright (c) 2001  David Parrish <dparrish@4u.net>
 ** 
 **  This program is free software; you can redistribute it and/or modify
 **  it under the terms of the GNU General Public License as published by
@@ -37,12 +37,29 @@ int mainloop(struct session * s)
 	s->sequence = 0;
 	s->listensock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
-	listenaddr.sin_family = AF_INET;
-	listenaddr.sin_port = htons(0);
-	listenaddr.sin_addr.s_addr = INADDR_ANY;
+	s->localaddr.sin_family = AF_INET;
+	s->localaddr.sin_port = htons(s->localport);
+	if(strcmp(s->localaddress,""))
+	{
+		s->debug(0,"Using local address %s\n",s->localaddress);
+		he = gethostbyname(s->localaddress);
+
+		if(he)
+		{
+			s->localaddr.sin_addr.s_addr = *((int*)(he->h_addr_list[0]));
+		}
+		else
+		{
+			s->localaddr.sin_addr.s_addr = inet_addr(s->localaddress);
+		}
+	}
+	else
+	{
+		s->localaddr.sin_addr.s_addr = INADDR_ANY;
+	}
 
 	addrsize = sizeof(struct sockaddr_in);
-	err = bind(s->listensock,(struct sockaddr *)&listenaddr,sizeof(listenaddr));
+	err = bind(s->listensock,(struct sockaddr *)&s->localaddr,sizeof(s->localaddr));
 	err = getsockname(s->listensock,(struct sockaddr *)&listenaddr,&addrsize);
 
 	s->sessionid = time(NULL);
@@ -74,7 +91,7 @@ int mainloop(struct session * s)
 		if(!handle_heartbeats(s))
 		{
 			int i;
-			s->ondisconnected();
+			s->ondisconnected(1);
 			s->noncritical("Sleeping for 60 seconds");
 			for(i=0;i<60;i++)
 			{

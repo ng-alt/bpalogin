@@ -1,6 +1,6 @@
 /*
-**	BPALogin v1.5 - lightweight portable BIDS2 login client
-**	Copyright (c) 1999  Shane Hyde (shyde@trontech.com.au)
+**	BPALogin - lightweight portable BIDS2 login client
+**	Copyright (c) 2001 David Parrish <dparrish@4u.net>
 ** 
 **  This program is free software; you can redistribute it and/or modify
 **  it under the terms of the GNU General Public License as published by
@@ -19,17 +19,8 @@
 */ 
 
 #include "bpalogin.h"
+#include "md5.h"
 
-/* MD5 context. */
-typedef struct {
-    unsigned int state[4];		/* state (ABCD) */
-    unsigned int count[2];		/* number of bits, modulo 2^64 (lsb first) */
-    unsigned char buffer[64];	/* input buffer */
-} MD5_CTX;
-
-void MD5Init(MD5_CTX *);
-void MD5Update(MD5_CTX *, unsigned char *, unsigned int);
-void MD5Final(unsigned char[16], MD5_CTX *);
 
 void genmd5(char *p,int len,char *digest)
 {
@@ -77,16 +68,29 @@ int login(struct session * s)
 	int authsocket;
 	struct transaction t;
 	INT2 transactiontype;
+	int addrsize;
+
+	s->localaddr.sin_port = htons(0);
 
 	authsocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	err = bind(authsocket,(struct sockaddr *)&s->localaddr,sizeof(struct sockaddr_in));
+	if(err)
+	{
+		socketerror(s,"Error binding auth socket");
+		closesocket(authsocket);
+		return 0;
+	}
+		
 	err = connect(authsocket,(struct sockaddr *)&s->authhost,sizeof(struct sockaddr_in));
 
 	if(err)
 	{
-		s->noncritical("Cant connect to auth server");
+		socketerror(s,"Cant connect to auth server");
 		closesocket(authsocket);
 		return 0;
 	}
+	addrsize = sizeof(struct sockaddr_in);
+	err = getsockname(authsocket,(struct sockaddr *)&s->localipaddress,&addrsize);
 
 	/*
 	** start the negotiation 
@@ -102,7 +106,8 @@ int login(struct session * s)
 	transactiontype = receive_transaction(s,authsocket,&t);
 	if(transactiontype != T_MSG_PROTOCOL_NEG_RESP)
 	{
-		s->critical("Logic error");
+		s->debug(0,"T_MSG_PROTOCOL_NEG_RESP - error transaction type (%d)",transactiontype);
+		return 0;
 	}
 
 	extract_valueINT2(s,&t,T_PARAM_STATUS_CODE,&s->retcode);
@@ -111,7 +116,8 @@ int login(struct session * s)
 
 	if(s->protocol != T_PROTOCOL_CHAL)
 	{
-		s->critical("Unsupported protocol");
+		s->debug(0,"T_MSG_PROTOCOL_NEG_RESP - Unsupported protocol (%d)",s->protocol);
+		return 0;
 	}
 
 	switch(s->retcode)
@@ -120,17 +126,39 @@ int login(struct session * s)
 	case T_STATUS_LOGIN_SUCCESS_SWVER:
 		break;
 	case T_STATUS_LOGIN_FAIL_SWVER:
-		s->critical("Login failure: software version");
+		{
+		s->debug(0,"T_MSG_PROTOCOL_NEG_RESP - Login failure: software version");
+		return 0;
+		}
 	case T_STATUS_LOGIN_FAIL_INV_PROT:
-		s->critical("Login failure: invalid protocol");
+		{
+		s->debug(0,"T_MSG_PROTOCOL_NEG_RESP - Login failure: invalid protocol");
+		return 0;
+		}
 	case T_STATUS_LOGIN_UNKNOWN:
-		s->critical("Login failure: unknown");
+		{
+		s->debug(0,"T_MSG_PROTOCOL_NEG_RESP - Login failure: unknown");
+		return 0;
+		}
 	}
 
 	closesocket(authsocket);
 
 	authsocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	err = bind(authsocket,(struct sockaddr *)&s->localaddr,sizeof(struct sockaddr_in));
+	if(err)
+	{
+		socketerror(s,"Error binding auth socket 2");
+		closesocket(authsocket);
+		return 0;
+	}
 	err = connect(authsocket,(struct sockaddr *)&s->authhost,sizeof(struct sockaddr_in));
+	if(err)
+	{
+		socketerror(s,"Error connecting auth socket 2");
+		closesocket(authsocket);
+		return 0;
+	}
 
 	start_transaction(&t,T_MSG_LOGIN_REQ,s->sessionid);
 	add_field_string(s,&t,T_PARAM_USERNAME,s->username);
@@ -148,16 +176,19 @@ int login(struct session * s)
 
 	if(transactiontype != T_MSG_AUTH_RESP)
 	{
-		s->critical("logic error");
+		s->debug(0,"T_MSG_AUTH_RESP - error transaction type (%d)",transactiontype);
+		return 0;
 	}
 
 	if(!extract_valueINT2(s,&t,T_PARAM_HASH_METHOD,&s->hashmethod))
 	{
-		s->critical("AUTH: no hashmethod");
+		s->debug(0,"T_MSG_AUTH_RESP - no hashmethod provided");
+		return 0;
 	}
 	if(!extract_valuestring(s,&t,T_PARAM_NONCE,s->nonce))
 	{
-		s->critical("Auth: no nonce");
+		s->debug(0,"T_MSG_AUTH_RESP - no nonce supplied");
+		return 0;
 	}
 
 	if(s->hashmethod == T_AUTH_MD5_HASH)
@@ -179,7 +210,8 @@ int login(struct session * s)
 skippo:
 	if(transactiontype != T_MSG_LOGIN_RESP)
 	{
-		s->critical("logic error");
+		s->debug(0,"T_MSG_LOGIN_RESP - error transaction type (%d)",transactiontype);
+		return 0;
 	}
 
 	extract_valueINT2(s,&t,T_PARAM_STATUS_CODE,&s->retcode);
@@ -190,28 +222,71 @@ skippo:
 	case T_STATUS_LOGIN_SUCCESSFUL_ALREADY_LOGGED_IN:
 		break;
 	case T_STATUS_USERNAME_NOT_FOUND:
-		s->critical("Login failure: username not known");
+		{
+		s->debug(0,"T_MSG_LOGIN_RESP - Login failure: username not known");
+		return 0;
+		}
 	case T_STATUS_INCORRECT_PASSWORD:
-		s->critical("Login failure: incorrect password");
+		{
+		s->debug(0,"T_MSG_LOGIN_RESP - Login failure: incorrect password");
+		return 0;
+		}
 	case T_STATUS_ACCOUNT_DISABLED:
-		s->critical("Login failure: disabled");
+		{
+		s->debug(0,"T_MSG_LOGIN_RESP - Login failure: Account disabled");
+		return 0;
+		}
 	case T_STATUS_LOGIN_RETRY_LIMIT:
 	case T_STATUS_USER_DISABLED:
 	case T_STATUS_FAIL_USERNAME_VALIDATE:
 	case T_STATUS_FAIL_PASSWORD_VALIDATE:
 	case T_STATUS_LOGIN_UNKNOWN:
-		s->critical("Login failure: other error");
+		{
+		s->debug(0,"T_MSG_LOGIN_RESP - Login failure: other error");
+		return 0;
+		}
 	}
 
 	extract_valueINT2(s,&t,T_PARAM_LOGOUT_SERVICE_PORT,&s->logoutport);
 	extract_valueINT2(s,&t,T_PARAM_STATUS_SERVICE_PORT,&s->statusport);
 	extract_valuestring(s,&t,T_PARAM_TSMLIST,s->tsmlist);
 	extract_valuestring(s,&t,T_PARAM_RESPONSE_TEXT,s->resptext);
+	{
+		int i,n;
+		char * p = s->tsmlist;
+		char t[200];
+		s->tsmcount = 0;
 
+		while((n = strcspn(p," ,"))!=0)
+		{
+			strncpy(t,p,n);
+			t[n] = 0;
+			p += n +1;
+			strcpy(s->tsmlist_s[s->tsmcount],t);
+			strcat(s->tsmlist_s[s->tsmcount++],s->authdomain);
+		}
+		for(i=0;i<s->tsmcount;i++)
+		{
+			struct hostent * he;
+			
+			he = gethostbyname(s->tsmlist_s[i]);
+			if(he)
+			{
+				s->tsmlist_in[i].sin_addr.s_addr = *((int*)(he->h_addr_list[0]));
+			}
+			else
+			{
+				s->tsmlist_in[i].sin_addr.s_addr = inet_addr(s->tsmlist_s[i]);
+			}
+			s->debug(1,"Will accept heartbeats from %s = %s\n",s->tsmlist_s[i],inet_ntoa(s->tsmlist_in[i].sin_addr));
+		}
+	}
 	logintime = time(NULL);
 
 	s->debug(0,"Logged on as %s - successful at %s",s->username,asctime(localtime(&logintime)));
 	s->sequence = 0;
+	s->lastheartbeat = time(NULL);
+	s->recenthb = 0;
 
 	closesocket(authsocket);
 	return 1;
@@ -235,13 +310,16 @@ int handle_heartbeats(struct session *s)
 	while(1)
 	{
 		transactiontype = receive_udp_transaction(s,s->listensock,&t,&s->fromaddr);
+
 		if(transactiontype == 0xffff)
 		{
 			s->debug(0,"Timed out waiting for heartbeat - logging on\n");
-			s->ondisconnected();
 			if(!login(s))
 				return 0;
-			s->onconnected(s->listenport);
+		}
+		else if(transactiontype == 0xfffd)
+		{
+			s->debug(0,"Badly structured packet received - discarding\n");
 		}
 		else if(transactiontype == 0xfffe)
 		{
@@ -268,7 +346,8 @@ int handle_heartbeats(struct session *s)
 		}
 		else if(transactiontype == T_MSG_RESTART_REQ)
 		{
-			s->critical("Restart request - unimplemented");
+			s->debug(0,"Restart request - unimplemented");
+			return 0;
 		}
 		else
 		{
@@ -301,12 +380,19 @@ int logout(INT2 reason,struct session * s)
 	struct transaction t;
 	INT2 transactiontype;
 
+	s->localaddr.sin_port = htons(0);
 	authsocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	err = connect(authsocket,(struct sockaddr *)&s->authhost,sizeof(struct sockaddr_in));
-
+	err = bind(authsocket,(struct sockaddr *)&s->localaddr,sizeof(struct sockaddr_in));
 	if(err)
 	{
-		s->noncritical("Cant connect to auth server");
+		socketerror(s,"Error binding logout auth socket");
+		closesocket(authsocket);
+		return 0;
+	}
+	err = connect(authsocket,(struct sockaddr *)&s->authhost,sizeof(struct sockaddr_in));
+	if(err)
+	{
+		socketerror(s,"Error connecting logout auth socket");
 		closesocket(authsocket);
 		return 0;
 	}
