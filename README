@@ -1,7 +1,7 @@
-BPALogin v2.0
--------------
+BPALogin
+--------
 
-This is a client to connect to Australia's Big Pond Advance powered by Cable.  
+This is a client to connect to Telstra's Big Pond Broadband powered by Cable.  
 
 This client should run on -
 
@@ -10,6 +10,7 @@ This client should run on -
 	* FreeBSD
 	* Most other Unices.
 
-BPALogin is maintained by Shane Hyde (shane@trontech.net)
+BPALogin was created by Shane Hyde, and is released under the GNU GPL.
+It is now maintained by William Rose <wdrose@sourceforge.net>.
 
-The latest version is at http://www.users.bigpond.net.au/bpalogin
+The latest version is at http://bpalogin.sourceforge.net/

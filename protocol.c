@@ -1,6 +1,6 @@
 /*
-**	BPALogin v2.0 - lightweight portable BIDS2 login client
-**	Copyright (c) 1999  Shane Hyde (shyde@trontech.com.au)
+**	BPALogin - lightweight portable BIDS2 login client
+**	Copyright (c) 2001-3 Shane Hyde, and others.
 ** 
 **  This program is free software; you can redistribute it and/or modify
 **  it under the terms of the GNU General Public License as published by
