@@ -194,25 +194,52 @@ INT2 receive_udp_transaction(struct session *s,int socket,struct transaction * t
 
 	if(r == -1)
 	{
-		return (INT2) 0xfffe;
+		return (INT2) E_BPA_SOCKET_ERROR;
 	}
 	else if(!r)
 	{
-		return (INT2) 0xffff;
+		return (INT2) E_BPA_LONG_HB_INTERVAL;
 	}
 	else
 	{
 		r = recvfrom(socket,(char *)t,1500,0,(struct sockaddr*)addr,&l);
-		if(r==-1)
-			return (INT2) 0xfffe;
 
+		if(r==-1)
+			return (INT2) E_BPA_SOCKET_ERROR;
+
+              /* *** Foxconn Add Start : Steve Hsieh : 2005-10-19 (bpaclient porting) *** */  
+              /*
+              **    check if a valid pkt comes
+              */
+              
+              for(i = 0;i<s->tsmcount;i++)
+	       {
+		    if(addr->sin_addr.s_addr == s->tsmlist_in[i].sin_addr.s_addr)
+			    break;
+	        }
+
+               if(i == s->tsmcount)
+	        {
+		        s->debug(0,"Received a heartbeat from unexpected source %s:%d\n",inet_ntoa(addr->sin_addr),ntohs(addr->sin_port));
+		        return (INT2)E_BPA_UNKNOWN_STATUS_SERVER;
+	        }
+
+	        t->length = r;  //why this line is needed
+
+	        if(!check_hb_packet(s,t,r))
+	        {
+		        return (INT2)E_BPA_ILLEGAL_PKT_FORMAT;
+	        }
+                
+               /* *** Foxconn Add Start : Steve Hsieh : 2005-10-19 (bpaclient porting) *** */  
+              
 		if(s->lastheartbeat + s->minheartbeat > time(NULL))
 		{
         		s->recenthb++;
         		if(s->recenthb > 3)
         		{
         			s->debug(0,"Heartbeats arriving too quickly - discarding\n");
-				return (INT2)0xfffd;
+				       return (INT2)E_BPA_SHORT_HB_INTERVAL;
 
         		}
 		}
@@ -222,6 +249,13 @@ INT2 receive_udp_transaction(struct session *s,int socket,struct transaction * t
 		s->lastheartbeat = time(NULL);
 	}
 
+       /* *** Foxconn Add Start : Steve Hsieh : 2005-10-19 (bpaclient porting) *** */
+       /*
+       **   check if it's a valid pkt and pkt comes from a trusted server
+       **   we should move this section to the right place so that the last heartbeat 
+       **   will be update only when the pkt apss the exam
+       */
+       /* --- moved ---
 	for(i = 0;i<s->tsmcount;i++)
 	{
 		if(addr->sin_addr.s_addr == s->tsmlist_in[i].sin_addr.s_addr)
@@ -236,13 +270,16 @@ INT2 receive_udp_transaction(struct session *s,int socket,struct transaction * t
 	t->length = r;
 
 	dump_recv_transaction(s,t);
-	/*
-	**  Lets make sure this packet is structured correctly
-	*/
+	//
+	//**  Lets make sure this packet is structured correctly
+	//
 	if(!check_hb_packet(s,t,r))
 	{
 		return (INT2)0xfffd;
 	}
+
+       -----*/
+       /* *** Foxconn Add End : Steve Hsieh : 2005-10-19 (bpaclient porting) *** */
 
 	dump_recv_transaction(s,t);
 

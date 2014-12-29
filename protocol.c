@@ -43,8 +43,24 @@ void makecredentials(char * credentials,struct session *s,INT2 msg,INT4 extra)
 
 	memcpy(buffer,s->nonce,16);
 	i += 16;
-	memcpy(buffer+i,s->password,strlen(s->password));
-	i += strlen(s->password);
+
+    /* foxconn modified start by EricHuang, 03/26/2007 */
+	//steve add
+//	memcpy(buffer+i,s->password_hashed,strlen(s->password_hashed));
+//	i += strlen(s->password_hashed);
+
+	if(s->hashmethod == T_AUTH_MD5_HASH)
+	{
+	    memcpy(buffer+i,s->password_hashed,strlen(s->password_hashed));
+	    i += strlen(s->password_hashed);
+	}
+	else
+	{
+	    memcpy(buffer+i,s->password,strlen(s->password));
+	    i += strlen(s->password);
+	}
+	/* foxconn modified end by EricHuang, 03/26/2007 */
+
 	memcpy(buffer+i,&(ts),sizeof(INT4));
 	i += sizeof(INT4);
 	memcpy(buffer+i,&j,sizeof(INT2));
@@ -70,6 +86,7 @@ int login(struct session * s)
 	INT2 transactiontype;
 	int addrsize;
 
+	s->debug(1,"start to login\n");
 	s->localaddr.sin_port = htons(0);
 
 	authsocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -103,6 +120,10 @@ int login(struct session * s)
 
 	send_transaction(s,authsocket,&t);
 
+/* Foxconn added start, Jared Hsu, 2006/03/15 */	
+	s->state = STATE_AWAIT_NEG_RESP;
+	bpa_state(s->state);
+/* Foxconn added end, Jared Hsu, 2006/03/15 */
 	transactiontype = receive_transaction(s,authsocket,&t);
 	if(transactiontype != T_MSG_PROTOCOL_NEG_RESP)
 	{
@@ -160,6 +181,10 @@ int login(struct session * s)
 		return 0;
 	}
 
+/* Foxconn added start, Jared Hsu, 2006/03/15 */
+	s->state = STATE_SEND_LOGIN_REQ;
+	bpa_state(s->state);
+/* Foxconn added end, Jared Hsu, 2006/03/15 */
 	start_transaction(&t,T_MSG_LOGIN_REQ,s->sessionid);
 	add_field_string(s,&t,T_PARAM_USERNAME,s->username);
 	add_field_INT2(s,&t,T_PARAM_CLIENT_VERSION,LOGIN_VERSION * 100);
@@ -170,6 +195,10 @@ int login(struct session * s)
 
 	send_transaction(s,authsocket,&t);
 
+/* Foxconn added start, Jared Hsu, 2006/03/15 */
+	s->state = STATE_AWAIT_LOGIN_AUTH_RESP;
+	bpa_state(s->state);
+/* Foxconn added end, Jared Hsu, 2006/03/15 */
 	transactiontype = receive_transaction(s,authsocket,&t);
 	if(transactiontype == T_MSG_LOGIN_RESP)
 		goto skippo;
@@ -193,9 +222,15 @@ int login(struct session * s)
 
 	if(s->hashmethod == T_AUTH_MD5_HASH)
 	{
-		genmd5(s->password,strlen(s->password),s->password);
+		
+		genmd5(s->password, strlen(s->password),s->password_hashed);
+
 	}
 
+/* Foxconn added start, Jared Hsu, 2006/03/15 */
+ 	s->state = STATE_SEND_LOGIN_AUTH_REQ;
+ 	bpa_state(s->state);
+/* Foxconn added end, Jared Hsu, 2006/03/15 */
 	start_transaction(&t,T_MSG_LOGIN_AUTH_REQ,s->sessionid);
 
 	s->timestamp = time(NULL);
@@ -206,6 +241,10 @@ int login(struct session * s)
 
 	send_transaction(s,authsocket,&t);
 
+/* Foxconn added start, Jared Hsu, 2006/03/15 */
+ 	s->state = STATE_AWAIT_LOGIN_RESP;
+ 	bpa_state(s->state);
+/* Foxconn added end Jared Hsu, 2006/03/15 */
 	transactiontype = receive_transaction(s,authsocket,&t);
 skippo:
 	if(transactiontype != T_MSG_LOGIN_RESP)
@@ -287,7 +326,11 @@ skippo:
 	s->sequence = 0;
 	s->lastheartbeat = time(NULL);
 	s->recenthb = 0;
-
+/* Foxconn added start, Jared Hsu, 2006/03/15 */
+ 	s->state = STATE_IDLE_LOGIN;
+ 	bpa_state(s->state);
+/* Foxconn added end, Jared Hsu, 2006/03/15 */
+ 	
 	closesocket(authsocket);
 	return 1;
 }
@@ -311,21 +354,31 @@ int handle_heartbeats(struct session *s)
 	{
 		transactiontype = receive_udp_transaction(s,s->listensock,&t,&s->fromaddr);
 
-		if(transactiontype == 0xffff)
+		if(transactiontype == E_BPA_LONG_HB_INTERVAL)
 		{
 			s->debug(0,"Timed out waiting for heartbeat - logging on\n");
 			if(!login(s))
 				return 0;
 		}
-		else if(transactiontype == 0xfffd)
-		{
-			s->debug(0,"Badly structured packet received - discarding\n");
-		}
-		else if(transactiontype == 0xfffe)
+              else if(transactiontype == E_BPA_SOCKET_ERROR)
 		{
 			s->debug(0,"Socket closed - shutting down\n");
 			return 1;
 		}
+		else if(transactiontype == E_BPA_SHORT_HB_INTERVAL)
+              {
+                     s->debug(0,"heartbeat pkt comes to quickly--\n");
+                     /* TO DO*/
+              }      
+              else if(transactiontype == E_BPA_UNKNOWN_STATUS_SERVER)
+              {
+			s->debug(0,"heartbeat pkt comes from a untrusted host - discarding\n");
+                     /* TO DO */
+		}
+              else if(transactiontype == E_BPA_ILLEGAL_PKT_FORMAT)
+              {
+                     s->debug(0,"Badly structured packet received - discarding\n");
+              }
 		else if(transactiontype == T_MSG_STATUS_REQ)
 		{
 			char buf[16];
@@ -342,7 +395,7 @@ int handle_heartbeats(struct session *s)
 
 			s->lastheartbeat = time(NULL);
 
-			s->debug(1,"Responded to heartbeat at %s",asctime(localtime(&s->lastheartbeat)));
+			s->debug(0,"Responded to heartbeat at %s",asctime(localtime(&s->lastheartbeat)));
 		}
 		else if(transactiontype == T_MSG_RESTART_REQ)
 		{
@@ -351,12 +404,13 @@ int handle_heartbeats(struct session *s)
 		}
 		else
 		{
-			/*
-			**  Melbourne servers were sending spurious UDP packets after authentication
-			**  This works around it.
-			*/
+			
+			//  Melbourne servers were sending spurious UDP packets after authentication
+			//  This works around it.
+			
 			s->debug(0,"Unknown heartbeat message %d ",transactiontype);
 		}
+
 	}
 	/*
 	**  Should never get here
@@ -400,6 +454,10 @@ int logout(INT2 reason,struct session * s)
 	/*
 	** start the negotiation 
 	*/
+	/* Foxconn added start, Jared Hsu, 2006/03/15 */
+	s->state = STATE_SEND_LOGOUT_REQ;
+	bpa_state(s->state);
+	/* Foxconn added end, Jared Hsu, 2006/03/15 */
 	start_transaction(&t,T_MSG_LOGOUT_REQ,s->sessionid);
 	add_field_string(s,&t,T_PARAM_USERNAME,s->username);
 	add_field_INT2(s,&t,T_PARAM_CLIENT_VERSION,LOGIN_VERSION * 100);
@@ -409,6 +467,10 @@ int logout(INT2 reason,struct session * s)
 
 	send_transaction(s,authsocket,&t);
 
+/* Foxconn added start, Jared Hsu, 2006/03/15 */
+	s->state = STATE_AWAIT_LOGOUT_AUTH_RESP;
+	bpa_state(s->state);
+/* Foxconn added end, Jared Hsu, 2006/03/15 */
 	transactiontype = receive_transaction(s,authsocket,&t);
 	if(transactiontype != T_MSG_AUTH_RESP)
 	{
@@ -426,9 +488,20 @@ int logout(INT2 reason,struct session * s)
 
 	if(s->hashmethod == T_AUTH_MD5_HASH)
 	{
-		genmd5(s->password,strlen(s->password),s->password);
+		/* Foxconn Add start : Steve Hsieh : 2005-10-12 (logout pswd error) */
+		/*
+		**	in genmd5() in login(), the original pswd is used to gen the pwsd_MD5 and 
+		**	override the original pswd, this in turn make the logout pswd double-computed 
+		** 	by genmd5(), so we used password_hashed to carry the hased password
+		*/
+		genmd5(s->password,strlen(s->password),s->password_hashed);
+
 	}
 
+/* Foxconn added start, Jared Hsu, 2006/03/15 */
+	s->state = STATE_SEND_LOGOUT_AUTH_REQ;
+	bpa_state(s->state);
+/* Foxconn added end, Jared Hsu, 2006/03/15 */
 	start_transaction(&t,T_MSG_LOGOUT_AUTH_RESP,s->sessionid);
 
 	s->timestamp = time(NULL);
@@ -439,6 +512,7 @@ int logout(INT2 reason,struct session * s)
 
 	send_transaction(s,authsocket,&t);
 
+ 	s->state = STATE_AWAIT_LOGOUT_RESP;
 	transactiontype = receive_transaction(s,authsocket,&t);
 	if(transactiontype != T_MSG_LOGOUT_RESP)
 	{
@@ -452,17 +526,17 @@ int logout(INT2 reason,struct session * s)
 	case T_STATUS_LOGOUT_SUCCESSFUL_ALREADY_DISCONNECTED:
 		break;
 	case T_STATUS_USERNAME_NOT_FOUND:
-		s->critical("Login failure: username not known");
+		s->critical("Logout failure: username not known");
 	case T_STATUS_INCORRECT_PASSWORD:
-		s->critical("Login failure: incorrect password");
+		s->critical("Logout failure: incorrect password");
 	case T_STATUS_ACCOUNT_DISABLED:
-		s->critical("Login failure: disabled");
+		s->critical("Logout failure: disabled");
 	case T_STATUS_LOGIN_RETRY_LIMIT:
 	case T_STATUS_USER_DISABLED:
 	case T_STATUS_FAIL_USERNAME_VALIDATE:
 	case T_STATUS_FAIL_PASSWORD_VALIDATE:
 	case T_STATUS_LOGIN_UNKNOWN:
-		s->critical("Login failure: other error");
+		s->critical("Logout failure: other error");
 	}
 
 	extract_valueINT2(s,&t,T_PARAM_LOGOUT_SERVICE_PORT,&s->logoutport);
@@ -470,9 +544,17 @@ int logout(INT2 reason,struct session * s)
 	extract_valuestring(s,&t,T_PARAM_TSMLIST,s->tsmlist);
 	extract_valuestring(s,&t,T_PARAM_RESPONSE_TEXT,s->resptext);
 
+    /* Foxconn added start by EricHuang, 09/29/2007 */
+#ifndef U12H092
 	logintime = time(NULL);
-
 	s->debug(0,"Logged out successful at %s",asctime(localtime(&logintime)));
+#endif
+    /* Foxconn added end by EricHuang, 09/29/2007 */
+
+    /* Foxconn added start pling 2006/06/14 */
+	s->state = STATE_IDLE_LOGOFF;
+	bpa_state(s->state);
+    /* Foxconn added end pling 2006/06/14 */
 	
 	closesocket(authsocket);
 	
